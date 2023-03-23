@@ -22,10 +22,10 @@ pub fn create_table(conn: &Connection, table_name: &str, table_columns: Vec<(&st
 
 /// Populate the table with records from an iterator.
 /// columns should be the columns of the table, and records should contain the values to populate columns with.
-pub fn populate_table(conn: Connection, table_name: &str, records: &[StringRecord], columns: Vec<&str>) -> Result<usize> {
+pub fn populate_table(conn: Connection, table_name: &str, records: Vec<Vec<&str>>, columns: Vec<&str>) -> Result<usize> {
     let mut records_written: usize = 0;
     for row in records.iter() {
-        debug!("reading row {:?}", row);
+        // debug!("reading row {:?}", row);
 
         // We need to know how many columns are in this row.
         let len = row.len();
