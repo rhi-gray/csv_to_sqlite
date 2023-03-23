@@ -1,0 +1,15 @@
+[package]
+name = "csv_to_sqlite"
+version = "0.1.0"
+edition = "2021"
+author = "Rhiannon Gray"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+clap = { version = "4.1.8", features = ["derive", "unicode"] }
+csv = "1.2.0"
+env_logger = "0.10.0"
+log = "0.4.17"
+rusqlite = { version = "0.28.0", features = ["bundled", "vtab", "array"] }
+#sqlite = "0.30.4"
