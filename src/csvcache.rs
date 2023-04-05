@@ -11,6 +11,10 @@ pub struct CSVCache {
     /// TODO: a more efficient representation.
     rows: Vec<Vec<String>>,
 
+    /// Maximum column count.
+    /// The number of columns in the row that has the most columns.
+    max_column_count: usize,
+
     /// Column name used for otherwise unnamed columns.
     default_column_name: String,
 }
@@ -20,23 +24,29 @@ impl Default for CSVCache {
         CSVCache {
             header: Some(Vec::new()),
             rows: vec![vec![]],
+            max_column_count: 0,
             default_column_name: String::from(""),
         }
     }
 }
 
 impl CSVCache {
-    pub fn load(args: &Arguments, path: &PathBuf) -> CSVCache {
-        // First off, try to load the CSV file.
+    pub fn load(args: &Arguments, path: &PathBuf) -> Result<CSVCache, csv::Error> {
+        // Load the CSV reader with arguments.
         // TODO: error handling.
-        let csv_data = fs::read_to_string(path).unwrap();
-        let mut reader = csv::Reader::from_reader(csv_data.as_bytes());
+        let mut reader = csv::ReaderBuilder::new()
+            .has_headers(args.use_header)
+            .delimiter(args.delimiter as u8)
+            .flexible(true)
+            .comment(Some('#' as u8))
+            .from_path(path)?;
+
+        // Keep track of this throughout the function.
+        let mut max_column_count = 0;
 
         // Check the arguments.
-        let use_header = args.use_header;
-        let header = if use_header {
+        let mut header = if args.use_header {
             // We need to populate the header.
-            // let result = get_headers(&mut reader);
             let val = match reader.headers() {
                 Ok(headers) => {
                     Some(
@@ -50,6 +60,10 @@ impl CSVCache {
                     None
                 },
             };
+
+            // Set the max column count.
+            max_column_count = match val.as_ref() { Some(x) => x.len(), None => 0 };
+
             val
         } else {
             // Default to no header.
@@ -62,24 +76,51 @@ impl CSVCache {
             match row {
                 Ok(record) => {
                     if !record.is_empty() {
+                        // Make a copy.
                         let record = record.iter()
                             .map(|x| x.to_string())
                             .collect::<Vec<String>>();
+                        // This might be a longer row.
+                        max_column_count = max_column_count.max(record.len());
                         rows.push(record);
                     }
                     ()
                 },
                 Err(er) => {
-                    error!("error reading file: {}", er);
+                    error!("Error reading CSV file: {}", er);
                     ()
                 }
             }
         }
 
-        CSVCache { 
-            header, rows,
-            default_column_name: args.default_column_name.to_string(),
+        // Now, if the max_column_count is greater than the length of the header row, pad it.
+        if let Some(ref mut header) = header { 
+            if max_column_count > header.len() {
+                for ii in header.len() .. max_column_count {
+                    header.push(format!("{}{}", args.default_column_name, ii + 1));
+                }
+            }
         }
+
+        Ok(
+            CSVCache { 
+                header, rows,
+                max_column_count,
+                default_column_name: args.default_column_name.to_string(),
+            }
+        )
+    }
+
+    /// Find the length of the longest row.
+    pub fn longest_row(&self) -> usize {
+        let mut max_len = match self.header.as_ref(){ 
+            Some(vec) => vec.len(),
+            None => 0,
+        };
+        for row in &self.rows {
+            max_len = max_len.max(row.len())
+        }
+        max_len
     }
 
     pub fn rows_iter(&self) -> std::slice::Iter<Vec<String>> {
@@ -95,6 +136,21 @@ impl CSVCache {
                 .map(|x| x.as_ref())
                 .collect::<Vec<&str>>()
         }
+    }
+
+    /// Return the nth element of each row.
+    /// If a row doesn't have the right number of columns, return None.
+    /// If the requested column is outside any row, return an empty vector.
+    pub fn get_nth_in_rows(&self, column: usize) -> Vec<Option<&str>> {
+        if column > self.max_column_count {
+            return vec![];
+        }
+
+        let mut result = vec![];
+        for row in &self.rows {
+            result.push(row.get(column).and_then(|value| Some(value.as_str())))
+        }
+        result
     }
 
     /// Get the name and type of a column.

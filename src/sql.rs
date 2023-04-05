@@ -13,79 +13,70 @@ pub fn create_table(conn: &Connection, table_name: &str, table_columns: Vec<(&st
     let query = format!(r#"
     CREATE TABLE IF NOT EXISTS "{}" ("id" INTEGER PRIMARY KEY AUTOINCREMENT, {});
     "#, table_name, columns);
-    
+
     let mut stmt = conn.prepare_cached(query.as_ref())?;
     stmt.execute([])?;
 
     Ok(())
 }
 
-/// Populate the table with records from an iterator.
-/// columns should be the columns of the table, and records should contain the values to populate columns with.
-pub fn populate_table(conn: Connection, table_name: &str, records: Vec<Vec<&str>>, columns: Vec<&str>) -> Result<usize> {
-    let mut records_written: usize = 0;
-    for row in records.iter() {
-        // debug!("reading row {:?}", row);
-
-        // We need to know how many columns are in this row.
-        let len = row.len();
-        if len == 0 
-        || len != columns.len() {
-            continue;
-        }
-
-        // The id of the last row added.
-        let id: Result<i32> = 
-        conn.prepare_cached("SELECT last_insert_rowid();")?
-            .query_row(params![], |r| r.get(0));
-        let id = match id {
-            Ok(id) => id + 1,
-            // Ignore errors and just start with id = 0.
-            Err(_) => 0, 
+/// Get the next ID to use.
+pub fn get_last_rowid(conn: &Connection) -> usize {
+    let id: Result<i32> = 
+    conn.prepare_cached("SELECT last_insert_rowid();").unwrap()
+        .query_row(params![], |r| r.get(0));
+    let id = match id {
+        Ok(id) if id >= 0 => id + 1,
+        // Ignore errors and just start with id = 0.
+        Ok(_id) => 0,
+        Err(_) => 0, 
         };
-        
-        // Create the row.
-        conn.prepare_cached(format!(r#"INSERT INTO "{}" ("id") VALUES ({});"#, table_name, id).as_ref())?
-            .execute([])?;
+    id.max(0) as usize
+}
 
-        // Begin a transaction.
-        conn.prepare_cached("BEGIN TRANSACTION;")?
-            .execute([])?;
+/// Add a row to a table.
+pub fn add_row(conn: &Connection, table_name: &str, columns: &[&str], values: &[&str], where_clause: Option<&str>) -> Result<(), rusqlite::Error> {
+    // We need to keep track of how many columns/values we need to 
+    let longest = 0
+        .max(columns.len())
+        .max(values.len());
 
-        let mut success = true;
-        for (column, value) in columns.iter().zip(row.iter()) {
-            // Prepare the query.
-            let query = 
-            format!(r#"UPDATE "{}" SET "{}" = ? WHERE "id" = ?;"#,
-                table_name,
-                column,
-            );
+    let values: Vec<String> = pad_row(&values, "", longest);
+    let columns: Vec<String> = pad_row(&columns, "", longest);
 
-            success = match conn.execute(&query, params![value, id]){
-                Ok(1) => {
-                    true
-                },
-                Ok(x) => {
-                    warn!("Unexpected number of rows altered: {}.", id);
-                    warn!("Query was {}.", query);
-                    true
-                },
-                Err(e) => {
-                    error!("Error: {}", e);
-                    false
-                }
-            };
-            if !success {
-                break;
-            }
+    let placeholder = build_placeholder(longest);
+    let column_names = columns.iter().map(|c| format!(r#""{}""#, c)).collect::<Vec<String>>().join(", ");
+    let query = format!(r#"INSERT INTO "{}" ({}) VALUES ({}) {};"#, table_name, &column_names, placeholder, where_clause.unwrap_or(""));
+    let mut stmt = conn.prepare(&query)?;
+
+    // Bind the parameters.
+    for (jj, val) in values.iter().enumerate() {
+        stmt.raw_bind_parameter(jj + 1, val)?;
+    }
+
+    match stmt.raw_execute() {
+        Ok(1) => Ok(()),
+        Ok(n) => { 
+            warn!("unexpected number of rows affected: {}", n); 
+            Ok(())
+        },
+        Err(er) => {
+            error!("error adding a row! {}", er);
+            Err(er)
         }
-        if success {
-            records_written += 1;
-        }
+    }
+}
 
-        // Finalise the transaction.
-        conn.prepare_cached("END TRANSACTION;")?
-            .execute([])?;
-   }
-    Ok(records_written)
+fn build_placeholder(len: usize) -> String {
+    let question_marks = (0..len).map(|_| "?").collect::<Vec<&str>>();
+    question_marks.join(", ")
+}
+
+fn pad_row(values: &[&str], pad: &str, pad_to: usize) -> Vec<String> {
+    let mut result: Vec<String> = values.iter().map(|x| x.to_string()).collect();
+    for _ii in values.len()..pad_to {
+        result.push(pad.to_string());
+    }
+
+    result
 }
